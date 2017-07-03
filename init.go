@@ -51,16 +51,21 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 	if i.ZFSParams.Compression {
 		rootOpts["compression"] = "on"
 	}
+	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset, "params": rootOpts}).Debug("Creating dataset.")
 	rootJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset, rootOpts)
 	if err != nil {
+		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
 		return datasets, err
 	}
+	//ToDo: Handle the error here and the other one below
 	rootJailDataset.SetProperty("jest:name", "root")
 
 	baseOpts := make(map[string]string)
 	baseOpts["mountpoint"] = filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version)
+	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, "params": rootOpts}).Debug("Creating dataset.")
 	baseJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, baseOpts)
 	if err != nil {
+		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
 		return datasets, err
 	}
 	baseJailDataset.SetProperty("jest:name", "baseJail")
@@ -70,24 +75,32 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 }
 
 func downloadVersion(ver string, path string, files []string) error {
+	log.WithFields(log.Fields{"site": FTPSITE}).Debug("Connecting to FreeBSD FTP mirror.")
 	client, err := ftp.Dial(FTPSite)
 	if err != nil {
+		log.WithFields(log.Fields{"error": err, "site": FTPSITE}).Warning("Couldn't connect to the FreeBSD FTP mirror.")
 		return err
 	}
 
+	log.WithFields(log.Fields{"site": FTPSITE, "credentials": "anonymous/anonymous"}).Debug("Logging in to FTP mirror.")
 	err = client.Login("anonymous", "anonymous")
 	if err != nil {
+		log.WithFields(log.Fields{"error": err, "site": FTPSITE, "credentials": "anonymous/anonymous"}).Warning("Couldn't login to the FreeBSD FTP mirror.")
 		return err
 	}
 
 	for i := 0; i < len(files); i++ {
+		log.WithFields(log.Fields{"file": files[i]}).Debug("Creating file.")
 		file, err := os.Create(filepath.Join(path, files[i]))
 		if err != nil {
+			log.WithFields(log.Fields{"error": err, "file": files[i]}).Warning("Couldn't create file.")
 			return err
 		}
 
+		log.WithFields(log.Fields{"file": "pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Debug("Downloading file.")
 		resp, err := client.Retr("pub/FreeBSD/releases/amd64/" + ver + "/" + files[i])
 		if err != nil {
+			log.WithFields(log.Fields{"error": err, "file": "pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Warning("Couldn't download file.")
 			return err
 		}
 
@@ -95,20 +108,25 @@ func downloadVersion(ver string, path string, files []string) error {
 
 		file.Close()
 		resp.Close()
+		log.WithFields(log.Fields{"file": files[i]}).Debug("Closed file.")
 	}
 
 	return nil
 }
 
 func validateVersion(v string) error {
-	r, err := regexp.Compile(`^[0-9]*\.[0-9]*-[A-Z0-9]*$`)
+	regex := `^[0-9]*\.[0-9]*-[A-Z0-9]*$`
+	log.WithFields(log.Fields{"version": v, "regex": regex}).Debug("Validating FreeBSD version against the regex.")
+	r, err := regexp.Compile(regex)
 	if err != nil {
+		log.WithFields(log.Fields{"error": err, "version": v, "regex": regex}).Debug("Failed to compile the regex.")
 		return err
 	}
 
 	if r.MatchString(v) == false {
 		//toDo: Find out why this error doesn't get returned in our response
-		return errors.New("The version specified: " + v + " is not valid. The version should match the regex ^[0-9]*.[0-9]*-[A-Z0-9]*$")
+		log.WithFields(log.Fields{"version": v, "regex": regex}).Warning("Failed to match the version against the regex.")
+		return errors.New("The version specified: " + v + " is not valid. The version should match the regex " + regex)
 	}
 
 	return nil
@@ -117,8 +135,10 @@ func validateVersion(v string) error {
 func extractVersion(path string, files []string) error {
 	//ToDo: Extract these concurrently, this part takes ages
 	for i := 0; i < len(files); i++ {
+		log.WithFields(log.Fields{"file": files[i], "path": path}).Debug("Extracting FreeBSD archive file.")
 		err := archiver.TarXZ.Open(filepath.Join(path, files[i]), path)
 		if err != nil {
+			log.WithFields(log.Fields{"error": err, "file": files[i], "path": path}).Debug("Couldn't extract the archive file.")
 			return err
 		}
 	}
@@ -128,8 +148,10 @@ func extractVersion(path string, files []string) error {
 
 func removeOldArchives(path string, files []string) error {
 	for i := 0; i < len(files); i++ {
+		log.WithFields(log.Fields{"file": files[i], "path": path}).Debug("Removing old FreeBSD archive file.")
 		err := os.Remove(filepath.Join(path, files[i]))
 		if err != nil {
+			log.WithFields(log.Fields{"error": err, "file": files[i], "path": path}).Warning("Couldn't remove the old archive file.")
 			return err
 		}
 	}
