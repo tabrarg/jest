@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/jlaffaye/ftp"
 	"github.com/mistifyio/go-zfs"
 	log "github.com/sirupsen/logrus"
@@ -14,7 +15,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"fmt"
 )
 
 type InitResponse struct {
@@ -289,7 +289,7 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 	ignoreErrorCmds := []string{`pkg`}
 	switch {
 	case applyUpdates == true:
-		ignoreErrorCmds = append(ignoreErrorCmds,`freebsd-update --not-running-from-cron fetch install`)
+		ignoreErrorCmds = append(ignoreErrorCmds, `freebsd-update --not-running-from-cron fetch install`)
 	}
 	log.Debug("Running some commands which we expect to generate some errors.")
 	for i := 0; i < len(ignoreErrorCmds); i++ {
@@ -321,18 +321,9 @@ func snapshotVolume(dataset zfs.Dataset) (*zfs.Dataset, error) {
 }
 
 func prepareHostConfig() error {
-	f, err := ioutil.ReadFile("/etc/rc.conf")
+	exists, err := CheckFileForString("/etc/rc.conf", `jail_enable="YES"`)
 
-	if err != nil {
-		log.WithFields(log.Fields{"fileName": "/etc/rc.conf", "error": err}).Warning("/etc/rc.conf doesn't exist!")
-		return err
-	}
-
-	s := string(f)
-	if strings.Contains(s, `jail_enable="YES"`) == true {
-		log.WithFields(log.Fields{"fileName": "/etc/rc.conf"}).Debug("Jails already enabled in /etc/rc.conf")
-		return nil
-	} else {
+	if exists == false {
 		log.WithFields(log.Fields{"fileName": "/etc/rc.conf"}).Debug(`Adding jail_enable="YES" to /etc/rc.conf`)
 		err = AppendStringToFile("/etc/rc.conf", "jail_enable=\"YES\"\n")
 		if err != nil {
@@ -450,7 +441,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	err = prepareHostConfig()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		res :=InitResponse{"Failed while preparing the host configuration files for jails.", err, datasets, ""}
+		res := InitResponse{"Failed while preparing the host configuration files for jails.", err, datasets, ""}
 		json.NewEncoder(w).Encode(res)
 		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
@@ -494,7 +485,7 @@ func GetInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(InitResponse{"Successfully found Jest datasets.", nil, datasets, ""})
+	json.NewEncoder(w).Encode(InitResponse{"This server has been initialised for Jest.", nil, datasets, ""})
 }
 
 func DeleteInitEndpoint(w http.ResponseWriter, r *http.Request) {

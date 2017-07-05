@@ -1,11 +1,12 @@
 package main
 
 import (
+	"github.com/mholt/archiver"
+	log "github.com/sirupsen/logrus"
+	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
-	log "github.com/sirupsen/logrus"
-	"github.com/mholt/archiver"
-	"io"
 	"strings"
 	"syscall"
 )
@@ -43,7 +44,7 @@ func extractFile(path string, file string, errors chan error) chan error {
 
 /*
 	Concurrently extract .xv files (used on the FreeBSD FTP site).
- */
+*/
 func ExtractFiles(path string, files []string) error {
 	errors := make(chan error, len(files))
 
@@ -84,31 +85,6 @@ func CopyFile(src, dst string) (err error) {
 	return
 }
 
-
-func GetEnv() map[string]string {
-	getEnvironment := func(data []string, getKeyVal func(item string) (key, val string)) map[string]string {
-		items := make(map[string]string)
-		for _, item := range data {
-			key, val := getKeyVal(item)
-			items[key] = val
-		}
-		return items
-	}
-	environment := getEnvironment(os.Environ(), func(item string) (key, val string) {
-		splits := strings.Split(item, "=")
-		key = splits[0]
-		val = splits[1]
-		return
-	})
-	return environment
-}
-
-func SetEnv(envs map[string]string) {
-	for key, value := range envs {
-		os.Setenv(key, value)
-	}
-}
-
 func Chroot(path string) (func() error, error) {
 	root, err := os.Open("/")
 	if err != nil {
@@ -127,4 +103,22 @@ func Chroot(path string) (func() error, error) {
 		}
 		return syscall.Chroot(".")
 	}, nil
+}
+
+func CheckFileForString(file string, str string) (bool, error) {
+	f, err := ioutil.ReadFile(file)
+
+	if err != nil {
+		log.WithFields(log.Fields{"fileName": "/etc/rc.conf", "error": err}).Warning("/etc/rc.conf doesn't exist!")
+		return false, err
+	}
+
+	s := string(f)
+	if strings.Contains(s, str) == true {
+		log.WithFields(log.Fields{"fileName": file}).Debug(str + " already exists in " + file)
+		return true, nil
+	} else {
+		log.WithFields(log.Fields{"fileName": file}).Debug(str + " not found in " + file)
+		return false, nil
+	}
 }

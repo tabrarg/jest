@@ -46,12 +46,19 @@ func main() {
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("PUT")
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("DELETE")
 
-	r.HandleFunc("/jails", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/jails", CreateJailsEndpoint).Methods("GET")
 	r.HandleFunc("/jails", DeleteInitEndpoint).Methods("POST")
 	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("GET")
 	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("POST")
 	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("PUT")
 	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("DELETE")
+
+	r.HandleFunc("/snapshots", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/snapshots", DeleteInitEndpoint).Methods("POST")
+	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("POST")
+	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("PUT")
+	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("DELETE")
 
 	http.Handle("/", r)
 
