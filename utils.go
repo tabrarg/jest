@@ -7,6 +7,7 @@ import (
 	"github.com/mholt/archiver"
 	"io"
 	"strings"
+	"syscall"
 )
 
 /*
@@ -26,7 +27,6 @@ func AppendStringToFile(path, text string) error {
 	}
 	return nil
 }
-
 
 func extractFile(path string, file string, errors chan error) chan error {
 	log.WithFields(log.Fields{"file": file, "path": path}).Debug("Extracting archive file.")
@@ -107,4 +107,24 @@ func SetEnv(envs map[string]string) {
 	for key, value := range envs {
 		os.Setenv(key, value)
 	}
+}
+
+func Chroot(path string) (func() error, error) {
+	root, err := os.Open("/")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := syscall.Chroot(path); err != nil {
+		root.Close()
+		return nil, err
+	}
+
+	return func() error {
+		defer root.Close()
+		if err := root.Chdir(); err != nil {
+			return err
+		}
+		return syscall.Chroot(".")
+	}, nil
 }

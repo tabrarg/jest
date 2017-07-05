@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"fmt"
 )
 
@@ -175,13 +174,18 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 		log.WithFields(log.Fields{"error": err}).Warning("Couldn't cd into /")
 		return "", err
 	}
-	err = syscall.Chroot(path)
+	_, err = exec.Command("sh", "-c", "sysctl kern.chroot_allow_open_directories=2").Output()
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Warning("Couldn't set sysctl kern.chroot_allow_open_directories to allow us to escape chroot")
+		return "", err
+	}
+	exitChroot, err := Chroot(path)
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Warning("Couldn't chroot into the base jail.")
 		return "", err
 	}
 
-	dirs := []string{"/usr/ports", "/usr/home."}
+	dirs := []string{"/usr/ports", "/usr/home"}
 	for i := 0; i < len(dirs); i++ {
 		log.WithFields(log.Fields{"dirName": dirs[i]}).Debug("Checking directory.")
 		if _, err := os.Stat(dirs[i]); err == nil {
@@ -197,8 +201,8 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 	}
 
 	log.Debug("Linking /usr/home to /home.")
-	//ToDo: This check doesn't seem to be working
-	if _, err := os.Stat("/home"); err == nil {
+	_, err = os.Stat("/home")
+	if err == nil {
 		log.WithFields(log.Fields{"linkName": "/home"}).Debug("Symlink already exists - skipping.")
 	} else {
 		err = os.Symlink("/usr/home", "/home")
@@ -269,11 +273,6 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 		}
 	}
 
-	switch {
-	case applyUpdates == true:
-		cmds = append(cmds, `freebsd-update --not-running-from-cron fetch install`)
-	}
-
 	pw := RandomString(128)
 	cmds = append(cmds, `echo "`+pw+`" | pw usermod root -h 0`)
 
@@ -287,16 +286,29 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 		log.WithFields(log.Fields{"output": string(out), "command": cmds[i]}).Debug("Finished command.")
 	}
 
-	log.Debug("Running the pkg command to generate directories.")
-	_, err = exec.Command("sh", "-c", "pkg").Output()
-	if err != nil {
-		// Do nothing. We know pkg will spit out some errors, we just want it to create the dirs.
+	ignoreErrorCmds := []string{`pkg`}
+	switch {
+	case applyUpdates == true:
+		ignoreErrorCmds = append(ignoreErrorCmds,`freebsd-update --not-running-from-cron fetch install`)
+	}
+	log.Debug("Running some commands which we expect to generate some errors.")
+	for i := 0; i < len(ignoreErrorCmds); i++ {
+		_, err = exec.Command("sh", "-c", ignoreErrorCmds[i]).Output()
+		if err != nil {
+			// Do nothing. We know pkg will spit out some errors, we just want it to create the dirs.
+		}
 	}
 
 	log.Debug("Exiting from the chroot.")
-	err = syscall.Chroot(".")
+	err = exitChroot()
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Warning("Couldn't exit from the chroot.")
+		return "", err
+	}
+
+	_, err = exec.Command("sh", "-c", "sysctl kern.chroot_allow_open_directories=1").Output()
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Warning("Couldn't set sysctl kern.chroot_allow_open_directories to restrict croot access")
 		return "", err
 	}
 
@@ -400,9 +412,6 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Debug("Backing up environment variables before chrooting.")
-	envs := GetEnv()
-
 	log.Info("Preparing the base jail.")
 	pw, err := prepareBaseJail(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), i.FreeBSDParams.ApplyUpdates)
 	if err != nil {
@@ -412,12 +421,6 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
-
-	log.Debug("Restoring environment variables.")
-	SetEnv(envs)
-	fmt.Println(os.Getenv("PATH"))
-	os.Setenv("PATH", os.Getenv("PATH") + ":/sbin:/bin:/usr/sbin:/usr/bin")
-
 
 	log.Info("Taking a snapshot of the base jail.")
 	for i := range datasets {
