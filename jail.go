@@ -1,9 +1,9 @@
 package main
 
 import (
-	"net/http"
 	"fmt"
 	"github.com/gorilla/mux"
+	"net/http"
 )
 
 func JailHandler(w http.ResponseWriter, r *http.Request) {

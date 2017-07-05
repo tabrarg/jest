@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jlaffaye/ftp"
-	"github.com/mholt/archiver"
 	"github.com/mistifyio/go-zfs"
 	log "github.com/sirupsen/logrus"
 	"io"
@@ -16,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"fmt"
 )
 
 type InitResponse struct {
@@ -41,6 +41,7 @@ type FreeBSDParams struct {
 	ApplyUpdates bool
 }
 
+//ToDo: Something better than this:
 const FTPSite = "ftp5.us.freebsd.org:21"
 
 func initDataset(i InitCreate) ([]zfs.Dataset, error) {
@@ -62,7 +63,7 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 
 	baseOpts := make(map[string]string)
 	baseOpts["mountpoint"] = filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version)
-	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, "params": rootOpts}).Debug("Creating dataset.")
+	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset + "/." + i.FreeBSDParams.Version, "params": rootOpts}).Debug("Creating dataset.")
 	baseJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, baseOpts)
 	if err != nil {
 		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
@@ -75,17 +76,17 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 }
 
 func downloadVersion(ver string, path string, files []string) error {
-	log.WithFields(log.Fields{"site": FTPSITE}).Debug("Connecting to FreeBSD FTP mirror.")
+	log.WithFields(log.Fields{"site": FTPSite}).Debug("Connecting to FreeBSD FTP mirror.")
 	client, err := ftp.Dial(FTPSite)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "site": FTPSITE}).Warning("Couldn't connect to the FreeBSD FTP mirror.")
+		log.WithFields(log.Fields{"error": err, "site": FTPSite}).Warning("Couldn't connect to the FreeBSD FTP mirror.")
 		return err
 	}
 
-	log.WithFields(log.Fields{"site": FTPSITE, "credentials": "anonymous/anonymous"}).Debug("Logging in to FTP mirror.")
+	log.WithFields(log.Fields{"site": FTPSite, "credentials": "anonymous/anonymous"}).Debug("Logging in to FTP mirror.")
 	err = client.Login("anonymous", "anonymous")
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "site": FTPSITE, "credentials": "anonymous/anonymous"}).Warning("Couldn't login to the FreeBSD FTP mirror.")
+		log.WithFields(log.Fields{"error": err, "site": FTPSite, "credentials": "anonymous/anonymous"}).Warning("Couldn't login to the FreeBSD FTP mirror.")
 		return err
 	}
 
@@ -97,10 +98,10 @@ func downloadVersion(ver string, path string, files []string) error {
 			return err
 		}
 
-		log.WithFields(log.Fields{"file": "pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Debug("Downloading file.")
+		log.WithFields(log.Fields{"file": FTPSite + "/pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Debug("Downloading file.")
 		resp, err := client.Retr("pub/FreeBSD/releases/amd64/" + ver + "/" + files[i])
 		if err != nil {
-			log.WithFields(log.Fields{"error": err, "file": "pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Warning("Couldn't download file.")
+			log.WithFields(log.Fields{"error": err, "file": FTPSite + "/pub/FreeBSD/releases/amd64/" + ver + "/" + files[i]}).Warning("Couldn't download file.")
 			return err
 		}
 
@@ -132,20 +133,6 @@ func validateVersion(v string) error {
 	return nil
 }
 
-func extractVersion(path string, files []string) error {
-	//ToDo: Extract these concurrently, this part takes ages
-	for i := 0; i < len(files); i++ {
-		log.WithFields(log.Fields{"file": files[i], "path": path}).Debug("Extracting FreeBSD archive file.")
-		err := archiver.TarXZ.Open(filepath.Join(path, files[i]), path)
-		if err != nil {
-			log.WithFields(log.Fields{"error": err, "file": files[i], "path": path}).Debug("Couldn't extract the archive file.")
-			return err
-		}
-	}
-
-	return nil
-}
-
 func removeOldArchives(path string, files []string) error {
 	for i := 0; i < len(files); i++ {
 		log.WithFields(log.Fields{"file": files[i], "path": path}).Debug("Removing old FreeBSD archive file.")
@@ -159,32 +146,9 @@ func removeOldArchives(path string, files []string) error {
 	return nil
 }
 
-func copyFile(src, dst string) (err error) {
-	in, err := os.Open(src)
-	if err != nil {
-		return
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return
-	}
-	defer func() {
-		cerr := out.Close()
-		if err == nil {
-			err = cerr
-		}
-	}()
-	if _, err = io.Copy(out, in); err != nil {
-		return
-	}
-	err = out.Sync()
-	return
-}
-
 func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 	log.Debug("Copying /etc/resolv.conf into the base jail.")
-	err := copyFile("/etc/resolv.conf", filepath.Join(path, "/etc/resolv.conf"))
+	err := CopyFile("/etc/resolv.conf", filepath.Join(path, "/etc/resolv.conf"))
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Warning("Failed to copy /etc/resolv.conf into the base jail.")
 		return "", err
@@ -336,27 +300,43 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 		return "", err
 	}
 
-	/*
-		switch {
-		case applyUpdates == true:
-			cmd := `freebsd-update fetch install -b ` + path
-			log.WithFields(log.Fields{"command": cmd}).Debug("Updating base jail.")
-			out, err := exec.Command("sh", "-c", cmd).Output()
-			if err != nil {
-				log.WithFields(log.Fields{"error": err, "command": cmd}).Warning("Command failed.")
-				return "", err
-			}
-			log.WithFields(log.Fields{"output": string(out), "command": cmd}).Debug("Finished command.")
-		}
-	*/
 	return pw, nil
+}
+
+func snapshotVolume(dataset zfs.Dataset) (*zfs.Dataset, error) {
+	snapshot, err := dataset.Snapshot("Ready", true)
+	return snapshot, err
+}
+
+func prepareHostConfig() error {
+	f, err := ioutil.ReadFile("/etc/rc.conf")
+
+	if err != nil {
+		log.WithFields(log.Fields{"fileName": "/etc/rc.conf", "error": err}).Warning("/etc/rc.conf doesn't exist!")
+		return err
+	}
+
+	s := string(f)
+	if strings.Contains(s, `jail_enable="YES"`) == true {
+		log.WithFields(log.Fields{"fileName": "/etc/rc.conf"}).Debug("Jails already enabled in /etc/rc.conf")
+		return nil
+	} else {
+		log.WithFields(log.Fields{"fileName": "/etc/rc.conf"}).Debug(`Adding jail_enable="YES" to /etc/rc.conf`)
+		err = AppendStringToFile("/etc/rc.conf", "jail_enable=\"YES\"\n")
+		if err != nil {
+			log.WithFields(log.Fields{"fileName": "/etc/rc.conf", "error": err}).Warning("Failed to append the line to the config file.")
+			return err
+		}
+	}
+
+	return nil
 }
 
 func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	var i InitCreate
 	var datasets []zfs.Dataset
 	files := []string{"base.txz", "lib32.txz", "src.txz"}
-	log.Info("Received a initialisation request.")
+	log.Info("Received a initialisation request from " + r.RemoteAddr)
 
 	log.Info("Decoding the JSON request.")
 	err := json.NewDecoder(r.Body).Decode(&i)
@@ -383,7 +363,9 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	datasets, err = initDataset(i)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(InitResponse{"Failed to create dataset " + i.ZFSParams.BaseDataset + ".", err, datasets, ""})
+		res := InitResponse{"Failed to create dataset " + i.ZFSParams.BaseDataset + ".", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
 	log.WithFields(log.Fields{"request": i, "datasets": datasets}).Info("Created ZFS datasets.")
@@ -392,31 +374,82 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	err = downloadVersion(i.FreeBSDParams.Version, filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(InitResponse{"Failed to get FreeBSD files for version " + i.FreeBSDParams.Version + ".", err, datasets, ""})
+		res := InitResponse{"Failed to get FreeBSD files for version " + i.FreeBSDParams.Version + ".", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
 
 	log.Info("Extracting FreeBSD archive files.")
-	err = extractVersion(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = ExtractFiles(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(InitResponse{"Failed to extract FreeBSD archive files.", err, datasets, ""})
+		res := InitResponse{"Failed to extract FreeBSD archive files.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
 
-	log.Info("Removing the extracted FreeBSD archive files.")
+	log.Info("Removing the extracted archive files.")
 	err = removeOldArchives(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(InitResponse{"Failed to cleanup the extracted FreeBSD files.", err, datasets, ""})
+		res := InitResponse{"Failed to cleanup the extracted FreeBSD files.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
 
-	log.Info("Preparing the FreeBSD base jail.")
+	log.Debug("Backing up environment variables before chrooting.")
+	envs := GetEnv()
+
+	log.Info("Preparing the base jail.")
 	pw, err := prepareBaseJail(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), i.FreeBSDParams.ApplyUpdates)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(InitResponse{"Failed to prepare the base jail.", err, datasets, ""})
+		res := InitResponse{"Failed to prepare the base jail.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+		return
+	}
+
+	log.Debug("Restoring environment variables.")
+	SetEnv(envs)
+	fmt.Println(os.Getenv("PATH"))
+	os.Setenv("PATH", os.Getenv("PATH") + ":/sbin:/bin:/usr/sbin:/usr/bin")
+
+
+	log.Info("Taking a snapshot of the base jail.")
+	for i := range datasets {
+		jestKey, err := datasets[i].GetProperty("jest:name")
+		fmt.Println(jestKey)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			res := InitResponse{"Error looking for a ZFS dataset", err, datasets, ""}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+			return
+		}
+
+		if jestKey == "baseJail" {
+			_, err := snapshotVolume(datasets[i])
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				res := InitResponse{"Failed to snapshot the base jail", err, datasets, ""}
+				json.NewEncoder(w).Encode(res)
+				log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+				return
+			}
+		}
+	}
+
+	log.Info("Preparing the host to run jails.")
+	err = prepareHostConfig()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res :=InitResponse{"Failed while preparing the host configuration files for jails.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
 
@@ -426,6 +459,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetInitEndpoint(w http.ResponseWriter, r *http.Request) {
+	_ = r
 	var datasets []zfs.Dataset
 
 	l, err := zfs.ListZpools()
@@ -446,7 +480,7 @@ func GetInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(datasets) == 0 {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(InitResponse{
 			"Failed to find any ZFS datasets registered with Jest.",
 			errors.New("No ZFS datasets containing property jest:name found"),
