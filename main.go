@@ -36,8 +36,6 @@ func main() {
 	fmt.Println("\nJest version", Version, "- http://"+hostname+":8080")
 	fmt.Println("Get enterprise support at: https://www.AltSrc.com/jest\n")
 
-	OpenDB()
-
 	r := mux.NewRouter()
 
 	r.HandleFunc("/init", GetInitEndpoint).Methods("GET")
@@ -68,6 +66,8 @@ func main() {
 	http.Handle("/", r)
 
 	log.Fatal(http.ListenAndServe(":8080", r))
+
+	DB.Close()
 }
 
 func InitStatus() (string, bool, error) {
@@ -79,7 +79,7 @@ func InitStatus() (string, bool, error) {
 	return path, true, nil
 }
 
-func OpenDB() error {
+func OpenDB() (*bolt.DB, error) {
 	JestDir, Initialised, err := InitStatus()
 	if err != nil {
 		log.Warn(err)
@@ -87,14 +87,13 @@ func OpenDB() error {
 	log.Info("Path: ", JestDir, ", Init Status: ", Initialised)
 
 	if Initialised == true {
-		DB, err := bolt.Open(filepath.Join(JestDir, "JestDB.bolt"), 0600, nil)
+		db, err := bolt.Open(filepath.Join(JestDir, "JestDB.bolt"), 0600, nil)
 		if err != nil {
 			log.Fatal(err)
-			return err
+			return db, err
 		}
-		defer DB.Close()
-		return nil
+		return db, nil
 	}
 
-	return errors.New("Host not initialised - cannot load DB")
+	return DB, errors.New("Host not initialised - cannot load DB")
 }
