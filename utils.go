@@ -5,10 +5,12 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 /*
@@ -27,6 +29,16 @@ func AppendStringToFile(path, text string) error {
 		return err
 	}
 	return nil
+}
+
+func RandomString(strlen int) string {
+	r = rand.New(rand.NewSource(time.Now().UnixNano()))
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	result := make([]byte, strlen)
+	for i := range result {
+		result[i] = chars[r.Intn(len(chars))]
+	}
+	return string(result)
 }
 
 func extractFile(path string, file string, errors chan error) chan error {

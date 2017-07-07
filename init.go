@@ -57,20 +57,30 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
 		return datasets, err
 	}
-	//ToDo: Handle the error here and the other one below
-	rootJailDataset.SetProperty("jest:name", "root")
 
-	baseOpts := make(map[string]string)
-	baseOpts["mountpoint"] = filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version)
+	jestOpts := map[string]string{"mountpoint": filepath.Join(i.ZFSParams.Mountpoint, ".jest")}
+	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset + "/.jest", "params": jestOpts}).Debug("Creating dataset.")
+	jestDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/.jest", jestOpts)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
+		return datasets, err
+	}
+
+	//ToDo: Handle the error here and the other one below
+	err = rootJailDataset.SetProperty("jest:dir", filepath.Join(i.ZFSParams.Mountpoint, "/.jest"))
+	if err != nil {
+		log.Warn(err)
+	}
+
+	baseOpts := map[string]string{"mountpoint": filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version)}
 	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset + "/." + i.FreeBSDParams.Version, "params": rootOpts}).Debug("Creating dataset.")
 	baseJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, baseOpts)
 	if err != nil {
 		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
 		return datasets, err
 	}
-	baseJailDataset.SetProperty("jest:name", "baseJail")
 
-	datasets = append(datasets, *rootJailDataset, *baseJailDataset)
+	datasets = append(datasets, *rootJailDataset, *baseJailDataset, *jestDataset)
 	return datasets, nil
 }
 
@@ -221,6 +231,8 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 
 	cmds := []string{`make aliases`}
 
+	//ToDo: Rip all this out and use the functions in utils for finding stings and appending them
+
 	rcConfOpts := []string{
 		`"#Added by Jest:\n"`,
 		`"sendmail_enable=\"NONE\"\n"`,
@@ -338,8 +350,18 @@ func prepareHostConfig() error {
 func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	var i InitCreate
 	var datasets []zfs.Dataset
+
 	files := []string{"base.txz", "lib32.txz", "src.txz"}
 	log.Info("Received a initialisation request from " + r.RemoteAddr)
+
+	log.Debug("Checking if server is already initialised.")
+	if Initialised == true {
+		err := errors.New("This host is already initialised.")
+		res := InitResponse{"Cannot initialise", err, datasets, ""}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"error": err}).Warn(res.Message)
+	}
 
 	log.Info("Decoding the JSON request.")
 	err := json.NewDecoder(r.Body).Decode(&i)

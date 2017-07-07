@@ -1,10 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	log "github.com/sirupsen/logrus"
 	"net/http"
-	"errors"
+	"path/filepath"
 )
 
 type CreateJailForm struct {
@@ -60,8 +59,8 @@ func checkJailName(name string) (bool, error) {
 	return true, nil
 }
 
-func writeJailConfig(jconf CreateJailForm) error {
-	err := AppendStringToFile("/etc/jail.conf", jconf.JailName+" {\n")
+func writeJailConfig(jconf CreateJailForm, path string) error {
+	err := AppendStringToFile(filepath.Join(path, jconf.JailName+".conf"), jconf.JailName+" {\n")
 	if err != nil {
 		//ToDo: Do something
 	}
@@ -73,83 +72,94 @@ func CreateJailsEndpoint(w http.ResponseWriter, r *http.Request) {
 	var form CreateJailForm
 	log.Info("Received a create jail request from " + r.RemoteAddr)
 
-	log.Debug("Decoding the JSON request.")
-	err := json.NewDecoder(r.Body).Decode(&form)
-	if err != nil {
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"Failed to decode the JSON request", err}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"request": form, "error": err}).Warn(res.Message)
-		return
-	}
-	log.WithFields(log.Fields{"request": form}).Debug("Decoded JSON request.")
+	_ = form
 
-	jailNameExists, err := checkJailName(form.JailName)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		res := CreateJailResponse{"Failed to validate the jail name.", err}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": err}).Warn(res.Message)
-	}
+	/*
+		log.Debug("Decoding the JSON request.")
+		err := json.NewDecoder(r.Body).Decode(&form)
+		if err != nil {
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"Failed to decode the JSON request", err}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"request": form, "error": err}).Warn(res.Message)
+			return
+		}
+		log.WithFields(log.Fields{"request": form}).Debug("Decoded JSON request.")
 
-	switch {
-	case jailNameExists == true:
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"Jail name already in use.", errors.New("This jail name was detected in /etc/jail.conf, please use a different one.")}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
-	case form.JailName == "":
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"No jail name supplied.", errors.New("You must supply a jail name to be used.")}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
-	case form.Template == "":
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"No template supplied.", errors.New("You must include a template with the request, the template is the name of the base jail you wish to clone.")}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
-	case form.Hostname == "":
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"No hostname supplied.", errors.New("You must include a hostname with the request.")}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
-	case form.IPV4Addr == "":
-		w.WriteHeader(http.StatusNotAcceptable)
-		res := CreateJailResponse{"No IP address supplied.", errors.New("You must include a IP with the request.")}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
-	}
-
-	if form.UseDefaults == true {
-		defaults := CreateJailForm{
-			true,
-			true,
-			true,
-			true,
-			true,
-			`/var/log/jail_${name}_console.log`,
-			form.Hostname,
-			form.IPV4Addr,
-			"root",
-			form.JailName,
-			"/usr/jail",
-			"root",
-			`/bin/sh /etc/rc`,
-			`/bin/sh /etc/rc.shutdown`,
-			form.Template,
-			form.UseDefaults,
+		jailNameExists, err := checkJailName(form.JailName)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			res := CreateJailResponse{"Failed to validate the jail name.", err}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": err}).Warn(res.Message)
 		}
 
-		err := writeJailConfig(defaults)
-		_ = err
-	}
-	/*
-		- Check if name is available
-		- Check if UseDefaults is set
-			- Check if Template is set
+		switch {
+		case jailNameExists == true:
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"Jail name already in use.", errors.New("This jail name was detected in /etc/jail.conf, please use a different one.")}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
+		case form.JailName == "":
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"No jail name supplied.", errors.New("You must supply a jail name to be used.")}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
+		case form.Template == "":
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"No template supplied.", errors.New("You must include a template with the request, the template is the name of the base jail you wish to clone.")}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
+		case form.Hostname == "":
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"No hostname supplied.", errors.New("You must include a hostname with the request.")}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
+		case form.IPV4Addr == "":
+			w.WriteHeader(http.StatusNotAcceptable)
+			res := CreateJailResponse{"No IP address supplied.", errors.New("You must include a IP with the request.")}
+			json.NewEncoder(w).Encode(res)
+			log.WithFields(log.Fields{"error": res.Error}).Warn(res.Message)
+		}
+
+		if form.UseDefaults == true {
+			defaults := CreateJailForm{
+				true,
+				true,
+				true,
+				true,
+				true,
+				`/var/log/jail_${name}_console.log`,
+				form.Hostname,
+				form.IPV4Addr,
+				"root",
+				form.JailName,
+				"/usr/jail",
+				"root",
+				`/bin/sh /etc/rc`,
+				`/bin/sh /etc/rc.shutdown`,
+				form.Template,
+				form.UseDefaults,
+			}
+
+			// Write the jail config to individual files in $base/.config, build the whole file in memory and flush to disk.
+			// Determine the base by setting a jest:Type field where one type is 'base' the others are 'template' and 'jail'
+			// Set the jail config file path as a dataset property jest:JailConf = /usr/jail/.conf/example.conf
+			// Generate a uid for each jail, so that name changes become just a ZFS property change
+			// Store password as property jest:Token = $randomString (only for templates)
+
+
+
+			err := writeJailConfig(defaults)
+			_ = err
+		}
+		/*
+			- Check if name is available
+			- Check if UseDefaults is set
+				- Check if Template is set
+					- Create Jail
+			- Check if template is set
 				- Create Jail
-		- Check if template is set
-			- Create Jail
 
 	*/
 }

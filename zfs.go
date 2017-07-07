@@ -1,86 +1,30 @@
 package main
 
 import (
+	"errors"
 	"github.com/mistifyio/go-zfs"
-	"runtime"
-	"sync"
+	log "github.com/sirupsen/logrus"
 )
 
-var wg sync.WaitGroup
-
-//ToDo: Add error handling
-func setZFSProperty(dataset *zfs.Dataset, propChan *chan map[string]string) {
-	property := <-*propChan
-
-	for key, val := range property {
-		dataset.SetProperty(key, val)
+func SearchZFSProperties(property string) (string, error) {
+	log.Debug("Looking for ZFS datasets with the property " + property + " set.")
+	list, err := zfs.ListZpools()
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Warning("Error reading ZFS datasets.")
+		return "", err
 	}
 
-	wg.Done()
-}
-
-/*
-	Concurrently set custom properties on a ZFS dataset
-*/
-// ToDo: add error handling
-func SetZFSProperties(dataset *zfs.Dataset, properties map[string]string) {
-	propChan := make(chan map[string]string)
-	workers := runtime.NumCPU() * 4
-	wg.Add(workers)
-
-	go func() {
-		for key, val := range properties {
-			propChan <- map[string]string{key: val}
-		}
-	}()
-
-	for i := 0; i < workers; i++ {
-		go setZFSProperty(dataset, &propChan)
-	}
-
-	wg.Wait()
-}
-
-type propertyMessage struct {
-	property map[string]string
-	err      error
-}
-
-func getZFSProperty(dataset *zfs.Dataset, propChanIn *chan string, propChanOut *chan propertyMessage) {
-	key := <-*propChanIn
-	val, err := dataset.GetProperty(key)
-	*propChanOut <- propertyMessage{map[string]string{key: val}, err}
-
-	wg.Done()
-}
-
-func GetZFSProperties(dataset zfs.Dataset, properties []string) (map[string]string, error) {
-	propChanIn := make(chan string)
-	propChanOut := make(chan propertyMessage)
-	propertiesOut := make(map[string]string)
-
-	workers := runtime.NumCPU() * 4
-	wg.Add(workers)
-
-	go func() {
-		for i := range properties {
-			propChanIn <- properties[i]
-		}
-	}()
-
-	for i := 0; i < workers; i++ {
-		go getZFSProperty(&dataset, &propChanIn, &propChanOut)
-	}
-
-	wg.Wait()
-
-	for i := range propChanOut {
-		if i.err == nil {
-			for key, val := range i.property {
-				propertiesOut[key] = val
+	for i := range list {
+		d, _ := list[i].Datasets()
+		for a := range d {
+			zfsProperty, _ := d[a].GetProperty(property)
+			if zfsProperty != "" {
+				if zfsProperty != "-" {
+					return zfsProperty, nil
+				}
 			}
 		}
 	}
 
-	return propertiesOut, nil
+	return "", errors.New("Couldn't find any ZFS datasets with the property " + property + " - please initialise Jest.")
 }
