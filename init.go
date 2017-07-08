@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/jlaffaye/ftp"
 	"github.com/mistifyio/go-zfs"
@@ -43,7 +42,7 @@ type FreeBSDParams struct {
 //ToDo: Something better than this:
 const FTPSite = "ftp5.us.freebsd.org:21"
 
-func initDataset(i InitCreate) ([]zfs.Dataset, error) {
+func InitDataset(i InitCreate) ([]zfs.Dataset, error) {
 	var datasets []zfs.Dataset
 
 	rootOpts := make(map[string]string)
@@ -84,7 +83,7 @@ func initDataset(i InitCreate) ([]zfs.Dataset, error) {
 	return datasets, nil
 }
 
-func downloadVersion(ver string, path string, files []string) error {
+func DownloadVersion(ver string, path string, files []string) error {
 	log.WithFields(log.Fields{"site": FTPSite}).Debug("Connecting to FreeBSD FTP mirror.")
 	client, err := ftp.Dial(FTPSite)
 	if err != nil {
@@ -124,7 +123,7 @@ func downloadVersion(ver string, path string, files []string) error {
 	return nil
 }
 
-func validateVersion(v string) error {
+func ValidateVersion(v string) error {
 	regex := `^[0-9]*\.[0-9]*-[A-Z0-9]*$`
 	log.WithFields(log.Fields{"version": v, "regex": regex}).Debug("Validating FreeBSD version against the regex.")
 	r, err := regexp.Compile(regex)
@@ -136,13 +135,13 @@ func validateVersion(v string) error {
 	if r.MatchString(v) == false {
 		//toDo: Find out why this error doesn't get returned in our response
 		log.WithFields(log.Fields{"version": v, "regex": regex}).Warning("Failed to match the version against the regex.")
-		return errors.New("The version specified: " + v + " is not valid. The version should match the regex " + regex)
+		return fmt.Errorf("The version specified: " + v + " is not valid. The version should match the regex " + regex)
 	}
 
 	return nil
 }
 
-func removeOldArchives(path string, files []string) error {
+func RemoveOldArchives(path string, files []string) error {
 	for i := 0; i < len(files); i++ {
 		log.WithFields(log.Fields{"file": files[i], "path": path}).Debug("Removing old FreeBSD archive file.")
 		err := os.Remove(filepath.Join(path, files[i]))
@@ -155,7 +154,7 @@ func removeOldArchives(path string, files []string) error {
 	return nil
 }
 
-func prepareBaseJail(path string, applyUpdates bool) (string, error) {
+func PrepareBaseJail(path string, applyUpdates bool) (string, error) {
 	log.Debug("Copying /etc/resolv.conf into the base jail.")
 	err := CopyFile("/etc/resolv.conf", filepath.Join(path, "/etc/resolv.conf"))
 	if err != nil {
@@ -327,11 +326,6 @@ func prepareBaseJail(path string, applyUpdates bool) (string, error) {
 	return pw, nil
 }
 
-func snapshotVolume(dataset zfs.Dataset) (*zfs.Dataset, error) {
-	snapshot, err := dataset.Snapshot("Ready", true)
-	return snapshot, err
-}
-
 func prepareHostConfig() error {
 	exists, err := CheckFileForString("/etc/rc.conf", `jail_enable="YES"`)
 
@@ -355,8 +349,8 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.Info("Received a initialisation request from " + r.RemoteAddr)
 
 	log.Debug("Checking if server is already initialised.")
-	if Initialised == true {
-		err := errors.New("This host is already initialised.")
+	if IsInitialised == true {
+		err := fmt.Errorf("This host is already initialised.")
 		res := InitResponse{"Cannot initialise", err, datasets, ""}
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(res)
@@ -375,7 +369,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.WithFields(log.Fields{"request": i}).Info("Decoded JSON request.")
 
 	log.WithFields(log.Fields{"version": i.FreeBSDParams.Version}).Info("Validating FreeBSD version.")
-	err = validateVersion(i.FreeBSDParams.Version)
+	err = ValidateVersion(i.FreeBSDParams.Version)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		res := InitResponse{"Invalid FreeBSD Version specified.", err, datasets, ""}
@@ -385,7 +379,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Creating ZFS datasets.")
-	datasets, err = initDataset(i)
+	datasets, err = InitDataset(i)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to create dataset " + i.ZFSParams.BaseDataset + ".", err, datasets, ""}
@@ -396,7 +390,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.WithFields(log.Fields{"request": i, "datasets": datasets}).Info("Created ZFS datasets.")
 
 	log.Info("Downloading FreeBSD files.")
-	err = downloadVersion(i.FreeBSDParams.Version, filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = DownloadVersion(i.FreeBSDParams.Version, filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to get FreeBSD files for version " + i.FreeBSDParams.Version + ".", err, datasets, ""}
@@ -416,7 +410,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Removing the extracted archive files.")
-	err = removeOldArchives(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = RemoveOldArchives(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to cleanup the extracted FreeBSD files.", err, datasets, ""}
@@ -426,7 +420,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Preparing the base jail.")
-	pw, err := prepareBaseJail(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), i.FreeBSDParams.ApplyUpdates)
+	pw, err := PrepareBaseJail(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), i.FreeBSDParams.ApplyUpdates)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to prepare the base jail.", err, datasets, ""}
@@ -448,7 +442,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if jestKey == "baseJail" {
-			_, err := snapshotVolume(datasets[i])
+			_, err := SnapshotZFSDataset(datasets[i])
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				res := InitResponse{"Failed to snapshot the base jail", err, datasets, ""}
@@ -499,7 +493,7 @@ func GetInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(InitResponse{
 			"Failed to find any ZFS datasets registered with Jest.",
-			errors.New("No ZFS datasets containing property jest:name found"),
+			fmt.Errorf("No ZFS datasets containing property jest:name found"),
 			datasets,
 			"",
 		})

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"github.com/mistifyio/go-zfs"
 	log "github.com/sirupsen/logrus"
 )
@@ -26,5 +26,10 @@ func SearchZFSProperties(property string) (string, error) {
 		}
 	}
 
-	return "", errors.New("Couldn't find any ZFS datasets with the property " + property + " - please initialise Jest.")
+	return "", fmt.Errorf("Couldn't find any ZFS datasets with the property " + property + " - please initialise Jest.")
+}
+
+func SnapshotZFSDataset(dataset zfs.Dataset) (*zfs.Dataset, error) {
+	snapshot, err := dataset.Snapshot("Ready", true)
+	return snapshot, err
 }

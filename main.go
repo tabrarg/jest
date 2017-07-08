@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/gorilla/mux"
@@ -14,14 +14,10 @@ import (
 
 const Version = "0.1.0"
 
-var JestDir string
-var Initialised bool
-var DB *bolt.DB
-
-type jail struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-}
+var jestDir, isInitialised, initErr = InitStatus()
+var JestDir = jestDir
+var IsInitialised = isInitialised
+var JestDB, dbErr = OpenDB()
 
 var r *rand.Rand
 
@@ -29,12 +25,22 @@ func init() {
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
-}
 
-func main() {
 	hostname, _ := os.Hostname()
 	fmt.Println("\nJest version", Version, "- http://"+hostname+":8080")
 	fmt.Println("Get enterprise support at: https://www.AltSrc.com/jest\n")
+}
+
+func main() {
+	if dbErr != nil {
+		log.Warn(dbErr)
+	}
+
+	if initErr != nil {
+		log.Warn(initErr)
+	}
+
+	InitDB()
 
 	r := mux.NewRouter()
 
@@ -49,12 +55,12 @@ func main() {
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("PUT")
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("DELETE")
 
-	r.HandleFunc("/jails", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/jails", ListJailsEndpoint).Methods("GET")
 	r.HandleFunc("/jails", CreateJailsEndpoint).Methods("POST")
-	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("GET")
-	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("POST")
-	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("PUT")
-	r.HandleFunc("/jails/{name}", DeleteInitEndpoint).Methods("DELETE")
+	r.HandleFunc("/jails/{name}", GetJailEndpoint).Methods("GET")
+	r.HandleFunc("/jails/{name}", CreateJailsEndpoint).Methods("POST")
+	r.HandleFunc("/jails/{name}", ChangeJailStateEndpoint).Methods("PUT")
+	r.HandleFunc("/jails/{name}", DeleteJailEndpoint).Methods("DELETE")
 
 	r.HandleFunc("/snapshots", DeleteInitEndpoint).Methods("GET")
 	r.HandleFunc("/snapshots", DeleteInitEndpoint).Methods("POST")
@@ -67,7 +73,25 @@ func main() {
 
 	log.Fatal(http.ListenAndServe(":8080", r))
 
-	DB.Close()
+	JestDB.Close()
+}
+
+// Create buckets in the database if they don't exist
+func InitDB() {
+	buckets := []string{"jails", "templates"}
+
+	for i := range buckets {
+		err := JestDB.Update(func(tx *bolt.Tx) error {
+			_, err := tx.CreateBucketIfNotExists([]byte(buckets[i]))
+			if err != nil {
+				return fmt.Errorf("create bucket: %s", err)
+			}
+			return nil
+		})
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func InitStatus() (string, bool, error) {
@@ -80,13 +104,7 @@ func InitStatus() (string, bool, error) {
 }
 
 func OpenDB() (*bolt.DB, error) {
-	JestDir, Initialised, err := InitStatus()
-	if err != nil {
-		log.Warn(err)
-	}
-	log.Info("Path: ", JestDir, ", Init Status: ", Initialised)
-
-	if Initialised == true {
+	if IsInitialised == true {
 		db, err := bolt.Open(filepath.Join(JestDir, "JestDB.bolt"), 0600, nil)
 		if err != nil {
 			log.Fatal(err)
@@ -95,5 +113,12 @@ func OpenDB() (*bolt.DB, error) {
 		return db, nil
 	}
 
-	return DB, errors.New("Host not initialised - cannot load DB")
+	return &bolt.DB{}, fmt.Errorf("Host not initialised - cannot load JestDB")
+}
+
+func HostNotInitialised(w http.ResponseWriter, r *http.Request) {
+	if IsInitialised == false {
+		json.NewEncoder(w).Encode(fmt.Errorf("You must initialise the host before you can call this function."))
+		return
+	}
 }
