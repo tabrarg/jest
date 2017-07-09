@@ -120,20 +120,6 @@ You can also get the information for a specific jail by issue a GET request to `
 
     curl "http://10.0.2.4:8080/jails/mash"
 
-**Update a jail**
-
-Call `/jails/{jailName}` with a `DELETE` request:
-```bash
-curl -X DELETE "http://10.0.2.4:8080/jails/mash"
-```
-Response:
-```javascript
-{
-  "Message": "Jail deleted.",
-  "Error": null,
-  ...
-}
-```
 
 **Change the state of a jail**
 
