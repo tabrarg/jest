@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/boltdb/bolt"
 	"github.com/jlaffaye/ftp"
 	"github.com/mistifyio/go-zfs"
+	"github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
@@ -28,13 +30,15 @@ type InitCreate struct {
 	FreeBSDParams FreeBSDParams
 }
 
+// ToDo: This should be a list of map[string]string really, so people can set any properties they like
 type ZFSParams struct {
-	BaseDataset string
+	Name        string
 	Mountpoint  string
 	Compression bool
 }
 
 type FreeBSDParams struct {
+	Name         string
 	Version      string
 	ApplyUpdates bool
 }
@@ -50,33 +54,30 @@ func InitDataset(i InitCreate) ([]zfs.Dataset, error) {
 	if i.ZFSParams.Compression {
 		rootOpts["compression"] = "on"
 	}
-	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset, "params": rootOpts}).Debug("Creating dataset.")
-	rootJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset, rootOpts)
+	rootJailDataset, err := CreateZFSDataset(i.ZFSParams.Name, rootOpts)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
+		log.WithFields(log.Fields{"error": err, "filesystem": i.ZFSParams.Name}).Warning("Failed to create dataset")
 		return datasets, err
 	}
 
 	jestOpts := map[string]string{"mountpoint": filepath.Join(i.ZFSParams.Mountpoint, ".jest")}
-	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset + "/.jest", "params": jestOpts}).Debug("Creating dataset.")
-	jestDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/.jest", jestOpts)
+	jestDataset, err := CreateZFSDataset(i.ZFSParams.Name+"/.jest", jestOpts)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
+		log.WithFields(log.Fields{"error": err, "filesystem": i.ZFSParams.Name}).Warning("Failed to create dataset")
 		return datasets, err
 	}
 
-	//ToDo: Handle the error here and the other one below
+	baseOpts := map[string]string{"mountpoint": filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Name)}
+	baseJailDataset, err := CreateZFSDataset(i.ZFSParams.Name+"/."+i.FreeBSDParams.Name, baseOpts)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "filesystem": i.ZFSParams.Name}).Warning("Failed to create dataset")
+		return datasets, err
+	}
+
+	//ToDo: Handle the error here properly
 	err = rootJailDataset.SetProperty("jest:dir", filepath.Join(i.ZFSParams.Mountpoint, "/.jest"))
 	if err != nil {
 		log.Warn(err)
-	}
-
-	baseOpts := map[string]string{"mountpoint": filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version)}
-	log.WithFields(log.Fields{"volName": i.ZFSParams.BaseDataset + "/." + i.FreeBSDParams.Version, "params": rootOpts}).Debug("Creating dataset.")
-	baseJailDataset, err := zfs.CreateFilesystem(i.ZFSParams.BaseDataset+"/."+i.FreeBSDParams.Version, baseOpts)
-	if err != nil {
-		log.WithFields(log.Fields{"error": err, "volName": i.ZFSParams.BaseDataset}).Warning("Failed to create dataset")
-		return datasets, err
 	}
 
 	datasets = append(datasets, *rootJailDataset, *baseJailDataset, *jestDataset)
@@ -133,7 +134,6 @@ func ValidateVersion(v string) error {
 	}
 
 	if r.MatchString(v) == false {
-		//toDo: Find out why this error doesn't get returned in our response
 		log.WithFields(log.Fields{"version": v, "regex": regex}).Warning("Failed to match the version against the regex.")
 		return fmt.Errorf("The version specified: " + v + " is not valid. The version should match the regex " + regex)
 	}
@@ -302,7 +302,7 @@ func PrepareBaseJail(path string, applyUpdates bool) (string, error) {
 	case applyUpdates == true:
 		ignoreErrorCmds = append(ignoreErrorCmds, `freebsd-update --not-running-from-cron fetch install`)
 	}
-	log.Debug("Running some commands which we expect to generate some errors.")
+	log.Debug("Updating the base jail.")
 	for i := 0; i < len(ignoreErrorCmds); i++ {
 		_, err = exec.Command("sh", "-c", ignoreErrorCmds[i]).Output()
 		if err != nil {
@@ -378,11 +378,13 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	templatePath := filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Name)
+
 	log.Info("Creating ZFS datasets.")
 	datasets, err = InitDataset(i)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		res := InitResponse{"Failed to create dataset " + i.ZFSParams.BaseDataset + ".", err, datasets, ""}
+		res := InitResponse{"Failed to create dataset " + i.ZFSParams.Name + ".", err, datasets, ""}
 		json.NewEncoder(w).Encode(res)
 		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
@@ -390,7 +392,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.WithFields(log.Fields{"request": i, "datasets": datasets}).Info("Created ZFS datasets.")
 
 	log.Info("Downloading FreeBSD files.")
-	err = DownloadVersion(i.FreeBSDParams.Version, filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = DownloadVersion(i.FreeBSDParams.Version, filepath.Join(templatePath), files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to get FreeBSD files for version " + i.FreeBSDParams.Version + ".", err, datasets, ""}
@@ -400,7 +402,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Extracting FreeBSD archive files.")
-	err = ExtractFiles(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = ExtractFiles(templatePath, files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to extract FreeBSD archive files.", err, datasets, ""}
@@ -410,7 +412,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Removing the extracted archive files.")
-	err = RemoveOldArchives(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), files)
+	err = RemoveOldArchives(templatePath, files)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to cleanup the extracted FreeBSD files.", err, datasets, ""}
@@ -420,7 +422,7 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info("Preparing the base jail.")
-	pw, err := PrepareBaseJail(filepath.Join(i.ZFSParams.Mountpoint, "."+i.FreeBSDParams.Version), i.FreeBSDParams.ApplyUpdates)
+	pw, err := PrepareBaseJail(templatePath, i.FreeBSDParams.ApplyUpdates)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		res := InitResponse{"Failed to prepare the base jail.", err, datasets, ""}
@@ -429,19 +431,10 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ToDo: Add error handling here if we can't find the jail
 	log.Info("Taking a snapshot of the base jail.")
 	for i := range datasets {
-		jestKey, err := datasets[i].GetProperty("jest:name")
-		fmt.Println(jestKey)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			res := InitResponse{"Error looking for a ZFS dataset", err, datasets, ""}
-			json.NewEncoder(w).Encode(res)
-			log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
-			return
-		}
-
-		if jestKey == "baseJail" {
+		if datasets[i].Mountpoint == templatePath {
 			_, err := SnapshotZFSDataset(datasets[i])
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -462,6 +455,69 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
 		return
 	}
+
+	log.Info("Initialising host..")
+	jestDir, isInitialised, initErr = InitStatus()
+	JestDir = jestDir
+	IsInitialised = isInitialised
+	if initErr != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := InitResponse{"Failed while trying to find the created ZFS pool.", initErr, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+		return
+	}
+
+	log.Info("Starting the DB")
+	jestDB, err := OpenDB()
+	JestDB = jestDB
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := InitResponse{"Failed trying to start the DB.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+		return
+	}
+
+	log.Info("Creating the DB buckets")
+	InitDB()
+
+	tUID := uuid.NewV4()
+	template := Template{i.FreeBSDParams.Name, false, templatePath, i.FreeBSDParams.Version, i.ZFSParams}
+
+	log.Info("Writing template settings to the DB.")
+	encoded, err := json.Marshal(template)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "tUID": tUID.String()}).Warn("Failed to encode the struct to JSON before writing to the JestDB.")
+	}
+	JestDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("templates"))
+		err := b.Put(tUID.Bytes(), encoded)
+		return err
+	})
+
+	cUID := uuid.NewV4()
+	log.Info("Writing Jest config to the DB.")
+	config := Config{i.ZFSParams.Mountpoint, i.ZFSParams.Name, false}
+	encoded, err = json.Marshal(config)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Warn("Failed to encode the struct to JSON before writing to the JestDB.")
+	}
+	JestDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("config"))
+		err := b.Put(cUID.Bytes(), encoded)
+		return err
+	})
+
+	conf, err := LoadConfig()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := InitResponse{"Failed trying to load the config from the DB.", err, datasets, ""}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
+		return
+	}
+	Conf = conf
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(InitResponse{"Successfully initialised the host for use with Jest.", nil, datasets, pw})

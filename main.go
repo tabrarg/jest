@@ -18,6 +18,7 @@ var jestDir, isInitialised, initErr = InitStatus()
 var JestDir = jestDir
 var IsInitialised = isInitialised
 var JestDB, dbErr = OpenDB()
+var Conf Config
 
 var r *rand.Rand
 
@@ -40,7 +41,10 @@ func main() {
 		log.Warn(initErr)
 	}
 
-	InitDB()
+	if IsInitialised == true {
+		InitDB()
+		Conf, _ = LoadConfig()
+	}
 
 	r := mux.NewRouter()
 
@@ -48,9 +52,9 @@ func main() {
 	r.HandleFunc("/init", CreateInitEndpoint).Methods("POST")
 	r.HandleFunc("/init", DeleteInitEndpoint).Methods("DELETE")
 
-	r.HandleFunc("/templates", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/templates", ListTemplatesEndpoint).Methods("GET")
 	r.HandleFunc("/templates", DeleteInitEndpoint).Methods("POST")
-	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/templates/{name}", GetTemplateEndpoint).Methods("GET")
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("POST")
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("PUT")
 	r.HandleFunc("/templates/{name}", DeleteInitEndpoint).Methods("DELETE")
@@ -69,6 +73,10 @@ func main() {
 	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("PUT")
 	r.HandleFunc("/snapshots/{name}", DeleteInitEndpoint).Methods("DELETE")
 
+	r.HandleFunc("/config", DeleteInitEndpoint).Methods("GET")
+	r.HandleFunc("/config", DeleteInitEndpoint).Methods("POST")
+	r.HandleFunc("/config", DeleteInitEndpoint).Methods("PUT")
+
 	http.Handle("/", r)
 
 	log.Fatal(http.ListenAndServe(":8080", r))
@@ -78,7 +86,7 @@ func main() {
 
 // Create buckets in the database if they don't exist
 func InitDB() {
-	buckets := []string{"jails", "templates"}
+	buckets := []string{"jails", "templates", "config"}
 
 	for i := range buckets {
 		err := JestDB.Update(func(tx *bolt.Tx) error {
