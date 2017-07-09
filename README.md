@@ -123,9 +123,9 @@ You can also get the information for a specific jail by issue a GET request to `
 
 **Change the state of a jail**
 
-Call `/jails/{jailName}` with a `PUT` request. For example, to start a jail, you would put the running state to 'true':
+Call `/jails/{jailName}` with a `PUT` request. For example, to start a jail, you would put the 'Running' state to 'true':
 ```bash
-curl -X PUT "http://10.0.2.4:8080/jails/mash" --data '{"JailState": {"Name": "Mash","Running": true}}'
+curl -X PUT "http://10.0.2.4:8080/jails/mash" --data '{"JailState": {"Name": "mash","Running": true}}'
 ```
 Response:
 ```javascript
@@ -133,7 +133,7 @@ Response:
   "Message": "Jail state updated.",
   "Error": null,
   "JailState": {
-      "Name": "Mash",
+      "Name": "mash",
       "Running": true,
       "JID": "2"
     }
