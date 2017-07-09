@@ -47,6 +47,7 @@ Response:
 }
 ```
 **List jails**
+
 Call `/jails` with a `GET` request:
 ```bash
 curl "http://10.0.2.4:8080/jails"
@@ -111,6 +112,7 @@ Response:
 }
 ```
 **Get information about a specific jail**
+
 Call `/jails/{jailName}` with a `GET` request:
 ```bash
 curl "http://10.0.2.4:8080/jails/mash"
