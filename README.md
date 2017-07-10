@@ -7,6 +7,14 @@ A ReST api for creating and managing FreeBSD jails written in Go.
 
 ----------
 
+## Watch ##
+
+Creating, starting and deleting jails with Jest:
+
+[![Alt text](https://img.youtube.com/vi/tsEJM3Kko7o/0.jpg)](https://www.youtube.com/watch?v=tsEJM3Kko7o)
+
+----------
+
 ## Jails ##
 **Create a jail**
 
