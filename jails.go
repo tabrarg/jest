@@ -14,6 +14,7 @@ import (
 )
 
 type Jail struct {
+	Name       string
 	JailConfig JailConfig
 	JailState JailState
 }
@@ -34,7 +35,7 @@ type JailConfig struct {
 	Start            string
 	Stop             string
 	Template         string
-	UseDefaults      string
+	UseDefaults      bool
 	//StartAtBoot   bool <- Need to think about how I will implement this
 }
 
@@ -61,6 +62,12 @@ type JailResponse struct {
 	Message string
 	Error   error
 	Jails   Jail
+}
+
+type JailStateResponse struct {
+	Message string
+	Error   error
+	JailState   JailState
 }
 
 const ( // = example line:
@@ -170,18 +177,18 @@ func CreateJailsEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defaults := JailConfig{
+	Defaults := JailConfig{
 		`0`,
 		`0`,
 		`0`,
 		`0`,
 		`0`,
-		`/var/log/jail_${name}_console.log`,
+		`/var/log/jail_`+form.JailName+`_console.log`,
 		form.Hostname,
 		form.IPV4Addr,
 		"root",
 		form.JailName,
-		"/usr/jail",
+		"/usr/jail/"+form.JailName,
 		"root",
 		`/bin/sh /etc/rc`,
 		`/bin/sh /etc/rc.shutdown`,
@@ -198,8 +205,8 @@ func CreateJailsEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if form.UseDefaults == "true" {
-		encoded, err := json.Marshal(defaults)
+	if form.UseDefaults == true {
+		encoded, err := json.Marshal(Defaults)
 		if err != nil {
 			log.WithFields(log.Fields{"error": err, "jUID": jUID.String()}).Warn("Failed to encode the struct to JSON before writing to the JestDB.")
 		}
@@ -260,7 +267,7 @@ func CreateJailsEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := CreateJailResponse{"JailConfig created successfully", nil, jUID.String()}
+	res := CreateJailResponse{"Jail created successfully", nil, jUID.String()}
 	log.WithFields(log.Fields{"error": res.Error, "jUID": res.JUID}).Info(res.Message)
 	json.NewEncoder(w).Encode(res)
 	return
@@ -292,9 +299,21 @@ func listAllJails() []Jail {
 
 	for j := range jailConfig {
 		jailStatus, _ := statusJail(jailConfig[j])
-		jail = append(jail, Jail{jailConfig[j], jailStatus})
+		jail = append(jail, Jail{jailConfig[j].JailName, jailConfig[j], jailStatus})
 	}
 	return jail
+}
+
+func returnJailConfig(name string) (JailConfig, error) {
+	jails := listAllJails()
+
+	for j := range jails {
+		if jails[j].JailConfig.JailName == name {
+			return jails[j].JailConfig, nil
+		}
+	}
+
+	return JailConfig{}, fmt.Errorf("Couldn't find the jail "+name+".")
 }
 
 func ListJailsEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -336,7 +355,7 @@ func GetJailEndpoint(w http.ResponseWriter, r *http.Request) {
 	for j := range jails {
 		if jails[j].JailConfig.JailName == vars["name"] {
 			w.WriteHeader(http.StatusOK)
-			res := JailResponse{"JailConfig found.", nil, jails[j]}
+			res := JailResponse{"Jail found.", nil, jails[j]}
 			log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
 			json.NewEncoder(w).Encode(res)
 			return
@@ -344,7 +363,7 @@ func GetJailEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNotFound)
-	res := JailResponse{"JailConfig not found.", fmt.Errorf("There is no jail on this host with the name " + vars["name"]), Jail{}}
+	res := JailResponse{"Jail not found.", fmt.Errorf("There is no jail on this host with the name " + vars["name"]), Jail{}}
 	log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
 	json.NewEncoder(w).Encode(res)
 	return
@@ -360,7 +379,7 @@ func startJail(jail JailConfig) (JailState, error) {
 		` ip4.addr="`+jail.IPV4Addr+`"`+
 		` exec.jail_user="`+jail.JailUser+`"`+
 		` path="`+jail.Path+`"`+
-		` exec.system_user=`+jail.SystemUser+`"`+
+		` exec.system_user="`+jail.SystemUser+`"`+
 		` exec.start="`+jail.Start+`"`+
 		` exec.stop="`+jail.Stop+`"`
 
@@ -372,6 +391,23 @@ func startJail(jail JailConfig) (JailState, error) {
 
 	jailStatus, err := statusJail(jail)
 	return jailStatus, err
+}
+
+func stopJail(jail JailConfig) (JailState, error) {
+	jID, err := getJID(jail.JailName)
+	if err != nil {
+		return JailState{}, err
+	}
+
+	cmd := `jail -r `+jID
+	out, _ := exec.Command("sh", "-c", cmd).Output()
+
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "command": cmd, "output": string(out)}).Info("Jail not running.")
+		return JailState{}, err
+	}
+
+	return statusJail(jail)
 }
 
 func statusJail(jail JailConfig) (JailState, error) {
@@ -388,7 +424,7 @@ func statusJail(jail JailConfig) (JailState, error) {
 }
 
 func getJID(name string) (string, error) {
-	cmd := `jls | awk '/`+name+`/{print $1}'`
+	cmd := `jls | awk '/`+name+`/{print $1}' | egrep -o "[0-9]*" | tr -d '\n'`
 	out, err := exec.Command("sh", "-c", cmd).Output()
 	if err != nil {
 		log.WithFields(log.Fields{"error": err, "command": cmd, "output": string(out)}).Warning("Command failed.")
@@ -400,7 +436,60 @@ func getJID(name string) (string, error) {
 
 func ChangeJailStateEndpoint(w http.ResponseWriter, r *http.Request) {
 	log.Info("Received a change jail state request from " + r.RemoteAddr)
+	var form Jail
 	HostNotInitialised(w, r)
+
+	log.Debug("Decoding the JSON request.")
+	err := json.NewDecoder(r.Body).Decode(&form)
+	if err != nil {
+		w.WriteHeader(http.StatusNotAcceptable)
+		res := JailStateResponse{"Failed to decode the JSON request", err, JailState{}}
+		json.NewEncoder(w).Encode(res)
+		log.WithFields(log.Fields{"request": form, "error": err}).Warn(res.Message)
+		return
+	}
+	log.WithFields(log.Fields{"request": form}).Debug("Decoded JSON request.")
+
+	if form.JailState.Running == false {
+		stopState, err := stopJail(form.JailConfig)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			res := JailStateResponse{"Couldn't stop the jail.", err, JailState{}}
+			log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+			json.NewEncoder(w).Encode(res)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		res := JailStateResponse{"Jail stopped.", nil, stopState}
+		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	jail, err := returnJailConfig(form.JailState.Name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := JailStateResponse{"Couldn't find the jail.", err, JailState{}}
+		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	startState, err := startJail(jail)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := JailResponse{"Couldn't start the jail.", err, Jail{}}
+		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	res := JailStateResponse{"Jail started.", nil, startState}
+	log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+	json.NewEncoder(w).Encode(res)
+	return
 }
 
 func DeleteJailEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -439,7 +528,7 @@ func DeleteJailEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	res := JailResponse{"JailConfig deleted.", nil, Jail{}}
+	res := JailResponse{"Jail deleted.", nil, Jail{}}
 	log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
 	json.NewEncoder(w).Encode(res)
 	return

@@ -28,7 +28,7 @@ func init() {
 	log.SetLevel(log.DebugLevel)
 
 	hostname, _ := os.Hostname()
-	fmt.Println("\nJest version", Version, "- http://"+hostname+":8080")
+	fmt.Println("\nJest version", Version, "- http://"+hostname+":80")
 	fmt.Println("Get enterprise support at: https://www.AltSrc.com/jest\n")
 }
 
@@ -61,9 +61,9 @@ func main() {
 
 	r.HandleFunc("/jails", ListJailsEndpoint).Methods("GET")
 	r.HandleFunc("/jails", CreateJailsEndpoint).Methods("POST")
+	r.HandleFunc("/jails", ChangeJailStateEndpoint).Methods("PUT")
 	r.HandleFunc("/jails/{name}", GetJailEndpoint).Methods("GET")
 	r.HandleFunc("/jails/{name}", CreateJailsEndpoint).Methods("POST")
-	r.HandleFunc("/jails/{name}", ChangeJailStateEndpoint).Methods("PUT")
 	r.HandleFunc("/jails/{name}", DeleteJailEndpoint).Methods("DELETE")
 
 	r.HandleFunc("/snapshots", DeleteInitEndpoint).Methods("GET")
@@ -79,7 +79,7 @@ func main() {
 
 	http.Handle("/", r)
 
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Fatal(http.ListenAndServe(":80", r))
 
 	JestDB.Close()
 }
