@@ -450,8 +450,17 @@ func ChangeJailStateEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	log.WithFields(log.Fields{"request": form}).Debug("Decoded JSON request.")
 
+	jail, err := returnJailConfig(form.JailState.Name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		res := JailStateResponse{"Couldn't find the jail.", err, JailState{}}
+		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
 	if form.JailState.Running == false {
-		stopState, err := stopJail(form.JailConfig)
+		stopState, err := stopJail(jail)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			res := JailStateResponse{"Couldn't stop the jail.", err, JailState{}}
@@ -462,15 +471,6 @@ func ChangeJailStateEndpoint(w http.ResponseWriter, r *http.Request) {
 
 		w.WriteHeader(http.StatusOK)
 		res := JailStateResponse{"Jail stopped.", nil, stopState}
-		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
-		json.NewEncoder(w).Encode(res)
-		return
-	}
-
-	jail, err := returnJailConfig(form.JailState.Name)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		res := JailStateResponse{"Couldn't find the jail.", err, JailState{}}
 		log.WithFields(log.Fields{"error": res.Error}).Info(res.Message)
 		json.NewEncoder(w).Encode(res)
 		return
