@@ -188,7 +188,7 @@ func CreateJailsEndpoint(w http.ResponseWriter, r *http.Request) {
 		form.IPV4Addr,
 		"root",
 		form.JailName,
-		"/usr/jail/"+form.JailName,
+		filepath.Join(Conf.JestDir, form.JailName),
 		"root",
 		`/bin/sh /etc/rc`,
 		`/bin/sh /etc/rc.shutdown`,
