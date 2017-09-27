@@ -468,20 +468,6 @@ func CreateInitEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("Starting the DB")
-	jestDB, err := OpenDB()
-	JestDB = jestDB
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		res := InitResponse{"Failed trying to start the DB.", err, datasets, ""}
-		json.NewEncoder(w).Encode(res)
-		log.WithFields(log.Fields{"Error": err}).Warn(res.Message)
-		return
-	}
-
-	log.Info("Creating the DB buckets")
-	InitDB()
-
 	tUID := uuid.NewV4()
 	template := Template{i.FreeBSDParams.Name, false, templatePath, i.FreeBSDParams.Version, i.ZFSParams}
 
